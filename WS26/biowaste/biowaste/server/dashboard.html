@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bio Waste Tracker – Kitchen dashboard</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-0: #f3f2ef; --surface-1: #fcfcfb; --border: #e3e1dc;
+    --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7974;
+    --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
+    --grid: #ebe9e4; --accent-bg: #fff4ec; --warn: #b35c00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-0: #121211; --surface-1: #1a1a19; --border: #2e2e2c;
+      --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+      --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+      --grid: #2a2a28; --accent-bg: #2a1e16; --warn: #f0a24a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  .viz-root { background: var(--surface-0); color: var(--text-primary); min-height: 100vh;
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 20px 24px 40px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+  .sub { color: var(--text-secondary); font-size: 13px; }
+  .status { font-size: 13px; color: var(--text-secondary); display: flex; gap: 8px; align-items: center; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-muted); display: inline-block; }
+  .dot.on { background: var(--series-3); }
+  .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; margin-top: 16px; }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .span-3 { grid-column: span 3; } .span-4 { grid-column: span 4; } .span-5 { grid-column: span 5; }
+  .span-7 { grid-column: span 7; } .span-8 { grid-column: span 8; } .span-12 { grid-column: span 12; }
+  @media (max-width: 900px) { .span-3, .span-4, .span-5, .span-7, .span-8 { grid-column: span 12; } }
+  .label { font-size: 12px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .04em; }
+  .big { font-size: 34px; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .unit { font-size: 16px; color: var(--text-secondary); font-weight: 500; }
+  .swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-right: 6px; vertical-align: 0; }
+  .typecard .big { font-size: 28px; }
+  .share { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  .action { background: var(--accent-bg); border-color: transparent; }
+  .action h2 { margin: 4px 0 6px; font-size: 19px; }
+  .action p { margin: 0; color: var(--text-primary); max-width: 70ch; }
+  .split { display: flex; height: 18px; gap: 2px; margin: 10px 0 6px; }
+  .split div { border-radius: 4px; min-width: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+  th { text-align: left; font-weight: 500; color: var(--text-secondary); font-size: 12px; padding: 4px 6px; border-bottom: 1px solid var(--border); }
+  td { padding: 5px 6px; border-bottom: 1px solid var(--grid); }
+  td.num { text-align: right; } th.num { text-align: right; }
+  .low { color: var(--warn); font-size: 12px; }
+  .legend { display: flex; gap: 14px; font-size: 13px; color: var(--text-secondary); margin: 6px 0 4px; flex-wrap: wrap; }
+  svg text { fill: var(--text-muted); font-size: 11px; }
+  .tip { position: fixed; pointer-events: none; background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,.12); display: none; z-index: 5; }
+  .log { font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; color: var(--text-secondary); max-height: 220px; overflow: auto; }
+  .pill { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-secondary); }
+  a { color: var(--series-1); }
+  .flash { animation: flash 1.2s ease-out; }
+  @keyframes flash { from { background: var(--accent-bg); } to { background: transparent; } }
+</style>
+</head>
+<body>
+<div class="viz-root">
+  <header>
+    <div>
+      <h1>Bio Waste Tracker</h1>
+      <div class="sub">Every disposal weighed, typed and timed · <span id="day"></span></div>
+    </div>
+    <div class="status"><span class="dot" id="dot"></span><span id="device">–</span>
+      · <a href="/events.csv" download>events.csv</a> · <a href="/raw_log.jsonl" download>raw log</a></div>
+  </header>
+
+  <div class="grid">
+    <div class="card span-3">
+      <div class="label">Total today</div>
+      <div class="big"><span id="total">0</span> <span class="unit">g</span></div>
+      <div class="share"><span id="count">0</span> disposals</div>
+    </div>
+    <div class="card span-3 typecard" data-type="preparation_waste">
+      <div class="label"><span class="swatch" style="background:var(--series-1)"></span>Preparation waste</div>
+      <div class="big"><span class="v">0</span> <span class="unit">g</span></div>
+      <div class="share"><span class="p">0</span>% · <span class="n">0</span> disposals</div>
+    </div>
+    <div class="card span-3 typecard" data-type="spoiled_stock">
+      <div class="label"><span class="swatch" style="background:var(--series-2)"></span>Spoiled stock</div>
+      <div class="big"><span class="v">0</span> <span class="unit">g</span></div>
+      <div class="share"><span class="p">0</span>% · <span class="n">0</span> disposals</div>
+    </div>
+    <div class="card span-3 typecard" data-type="plate_leftovers">
+      <div class="label"><span class="swatch" style="background:var(--series-3)"></span>Plate leftovers</div>
+      <div class="big"><span class="v">0</span> <span class="unit">g</span></div>
+      <div class="share"><span class="p">0</span>% · <span class="n">0</span> disposals</div>
+    </div>
+
+    <div class="card span-8 action">
+      <div class="label">Biggest loss stream · do this tomorrow morning</div>
+      <h2 id="insight">Waiting for the first disposal…</h2>
+      <p id="actiontext"></p>
+      <div class="split" id="split" aria-label="Share of each type"></div>
+    </div>
+    <div class="card span-4">
+      <div class="label">On the tray now</div>
+      <div class="big"><span id="live">0</span> <span class="unit">g</span></div>
+      <div class="share" id="livestate">–</div>
+    </div>
+
+    <div class="card span-7">
+      <div class="label">When the waste happens (grams per hour)</div>
+      <div class="legend">
+        <span><span class="swatch" style="background:var(--series-1)"></span>Preparation</span>
+        <span><span class="swatch" style="background:var(--series-2)"></span>Spoiled stock</span>
+        <span><span class="swatch" style="background:var(--series-3)"></span>Plate leftovers</span>
+      </div>
+      <svg id="hourly" width="100%" height="220" role="img" aria-label="Grams per hour by type"></svg>
+    </div>
+    <div class="card span-5">
+      <div class="label">Latest disposals</div>
+      <table><thead><tr><th>#</th><th>Time</th><th class="num">Grams</th><th>Type</th><th>Source</th></tr></thead>
+        <tbody id="recent"></tbody></table>
+    </div>
+
+    <div class="card span-12">
+      <div class="label">Honest log – what the sensor saw besides disposals</div>
+      <div class="legend" id="counters"></div>
+      <div class="log" id="rawlog"></div>
+    </div>
+  </div>
+  <div class="tip" id="tip"></div>
+</div>
+
+<script>
+const TYPES = ["preparation_waste", "spoiled_stock", "plate_leftovers"];
+const NAMES = {preparation_waste: "Preparation", spoiled_stock: "Spoiled stock", plate_leftovers: "Plate leftovers"};
+const VAR = {preparation_waste: "var(--series-1)", spoiled_stock: "var(--series-2)", plate_leftovers: "var(--series-3)"};
+const fmt = n => Math.round(n).toLocaleString("de-DE");
+const tip = document.getElementById("tip");
+let lastRecord = 0;
+
+function showTip(e, html) { tip.innerHTML = html; tip.style.display = "block";
+  tip.style.left = (e.clientX + 14) + "px"; tip.style.top = (e.clientY + 14) + "px"; }
+function hideTip() { tip.style.display = "none"; }
+
+function drawHourly(rows) {
+  const svg = document.getElementById("hourly");
+  const W = svg.clientWidth || 600, H = 220, padL = 44, padB = 22, padT = 8;
+  const hours = []; for (let h = 6; h <= 23; h++) hours.push(h);
+  const byH = Object.fromEntries(rows.map(r => [r.hour, r]));
+  const maxV = Math.max(100, ...rows.map(r => TYPES.reduce((s, t) => s + r[t], 0)));
+  const step = Math.pow(10, Math.floor(Math.log10(maxV))); const top = Math.ceil(maxV / step) * step;
+  const bw = (W - padL) / hours.length, barW = Math.max(6, Math.min(26, bw - 8));
+  const y = v => padT + (H - padT - padB) * (1 - v / top);
+  let s = "";
+  for (let i = 0; i <= 4; i++) { const v = top * i / 4;
+    s += `<line x1="${padL}" x2="${W}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)" stroke-width="1"/>`;
+    s += `<text x="${padL - 6}" y="${y(v) + 4}" text-anchor="end">${fmt(v)}</text>`; }
+  hours.forEach((h, i) => {
+    const x = padL + i * bw + (bw - barW) / 2; const r = byH[h];
+    if (i % 2 === 0) s += `<text x="${x + barW / 2}" y="${H - 6}" text-anchor="middle">${h}h</text>`;
+    if (!r) return;
+    let acc = 0; const segs = TYPES.filter(t => r[t] > 0);
+    segs.forEach((t, k) => {
+      const y1 = y(acc + r[t]), y0 = y(acc); acc += r[t];
+      const gap = k < segs.length - 1 ? 2 : 0, isTop = k === segs.length - 1;
+      const hgt = Math.max(1, y0 - y1 - gap);
+      s += isTop
+        ? `<path d="M${x},${y1 + hgt} V${y1 + 4} Q${x},${y1} ${x + 4},${y1} H${x + barW - 4} Q${x + barW},${y1} ${x + barW},${y1 + 4} V${y1 + hgt} Z" fill="${VAR[t]}"/>`
+        : `<rect x="${x}" y="${y1 + gap}" width="${barW}" height="${hgt}" fill="${VAR[t]}"/>`;
+    });
+    const tot = TYPES.reduce((a, t) => a + r[t], 0);
+    const body = `<b>${h}:00–${h + 1}:00</b> · ${fmt(tot)} g<br>` +
+      TYPES.map(t => `<span class="swatch" style="background:${VAR[t]}"></span>${NAMES[t]}: ${fmt(r[t])} g`).join("<br>");
+    s += `<rect x="${padL + i * bw}" y="${padT}" width="${bw}" height="${H - padT - padB}" fill="transparent" data-tip="${encodeURIComponent(body)}"/>`;
+  });
+  svg.innerHTML = s;
+  svg.querySelectorAll("[data-tip]").forEach(el => {
+    el.addEventListener("mousemove", e => showTip(e, decodeURIComponent(el.dataset.tip)));
+    el.addEventListener("mouseleave", hideTip);
+  });
+}
+
+async function refresh() {
+  let d; try { d = await (await fetch("/api/state")).json(); } catch { document.getElementById("device").textContent = "server offline"; return; }
+  document.getElementById("day").textContent = d.day;
+  document.getElementById("device").textContent = d.device;
+  document.getElementById("dot").classList.toggle("on", d.live.connected);
+  document.getElementById("total").textContent = fmt(d.total_g);
+  document.getElementById("count").textContent = d.count;
+  document.querySelectorAll(".typecard").forEach(c => { const t = c.dataset.type;
+    c.querySelector(".v").textContent = fmt(d.totals_g[t]);
+    c.querySelector(".p").textContent = d.shares_pct[t].toFixed(0);
+    c.querySelector(".n").textContent = d.counts[t]; });
+  if (d.biggest) {
+    document.getElementById("insight").textContent = `${NAMES[d.biggest]}: ${d.shares_pct[d.biggest].toFixed(0)}% of today's waste (${fmt(d.totals_g[d.biggest])} g). ${d.insight}`;
+    document.getElementById("actiontext").textContent = d.action;
+  }
+  document.getElementById("split").innerHTML = TYPES.filter(t => d.shares_pct[t] > 0).map(t =>
+    `<div style="flex:${d.shares_pct[t]};background:${VAR[t]}" title="${NAMES[t]} ${d.shares_pct[t]}%"></div>`).join("");
+  document.getElementById("live").textContent = fmt(d.live.g || 0);
+  document.getElementById("livestate").textContent = !d.live.connected ? "no live signal" :
+    d.live.pending ? "Disposal weighed – press a type button" : d.live.state === "moving" ? "Weighing… hold still" : "Ready";
+  const newest = d.recent.length ? d.recent[0].record_no : 0;
+  document.getElementById("recent").innerHTML = d.recent.map(e => `<tr class="${e.record_no > lastRecord && lastRecord ? "flash" : ""}">
+    <td>${e.record_no}</td><td>${e.timestamp.slice(11)}</td><td class="num">${fmt(e.weight_g)}</td>
+    <td><span class="swatch" style="background:${VAR[e.type]}"></span>${NAMES[e.type]}</td>
+    <td>${e.source}${e.confidence === "low" ? ' <span class="low">low conf.</span>' : ""}</td></tr>`).join("");
+  lastRecord = newest;
+  const c = d.counters;
+  document.getElementById("counters").innerHTML =
+    `<span class="pill">tray emptied: ${c.removal}</span><span class="pill">bumps ignored: ${c.ignored}</span>` +
+    `<span class="pill">unstable: ${c.unstable}</span><span class="pill">overload: ${c.overload}</span>` +
+    `<span class="pill">no button → time rule: ${c.unassigned}</span>`;
+  document.getElementById("rawlog").innerHTML = d.raw_tail.map(r => `${r.ts.slice(11)}  ${JSON.stringify(r).replace(/^\{"ts":"[^"]+",/, "{")}`).join("<br>");
+  drawHourly(d.hourly);
+}
+refresh(); setInterval(refresh, 1000);
+</script>
+</body>
+</html>
