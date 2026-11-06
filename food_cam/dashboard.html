@@ -130,6 +130,24 @@ async function status(){
 
 function renderLast(r){
   const c = +r.confidence || 0;
+  const off = (r.food||"") === "offline test";
+  const err = !off && c === 0 && /error|API|no ANTHROPIC/i.test(r.description||"");
+  if(off || err){
+    document.getElementById("last").innerHTML = `
+      <div class="hero">
+        <div class="emoji">${off ? "✅" : "⚠️"}</div>
+        <div><div class="food" style="text-transform:none">${off ? "Throw detected" : "AI error"}</div>
+          <div class="desc">${off ? "Camera + motion work. AI is OFF (--offline), so no food name.<br>Start without --offline and set ANTHROPIC_API_KEY to name the food."
+                                  : esc(r.description)}</div></div>
+      </div>
+      <div class="chips"><span class="chip">#${esc(r.throw_no)} · ${esc((r.timestamp||"").slice(11,19))}</span>
+        <span class="chip">throw ${esc(r.throw_s)} s</span></div>
+      <div class="muted" style="font-size:13px">Frames sent to the AI (3× hand, 1× bin after) – check the food is visible:</div>
+      <img id="collage" src="/img/${encodeURIComponent(r.image)}" style="display:block" alt="frames">`;
+    const card = document.getElementById("lastcard");
+    card.classList.remove("flash"); void card.offsetWidth; card.classList.add("flash");
+    return;
+  }
   document.getElementById("last").innerHTML = `
     <div class="hero">
       <div class="emoji">${emoji(r.food, r.item)}</div>
@@ -157,7 +175,12 @@ function renderBars(rows){
     tot[k].n++; tot[k].g += parseFloat(r.weight_g)||0;
   }
   const list = Object.entries(tot).sort((a,b)=> (b[1].g-a[1].g) || (b[1].n-a[1].n)).slice(0,10);
-  if(!list.length){ document.getElementById("bars").innerHTML='<div class="empty">No data yet</div>'; return; }
+  if(!list.length){
+    const offN = rows.filter(r=>r.food==="offline test").length;
+    document.getElementById("bars").innerHTML = offN
+      ? `<div class="empty">${offN} throws detected in offline mode.<br>Food totals appear once the AI is on.</div>`
+      : '<div class="empty">No data yet</div>';
+    return; }
   const useG = list.some(([,v])=>v.g>0);
   const max = Math.max(...list.map(([,v])=> useG? v.g : v.n));
   document.getElementById("bars").innerHTML = list.map(([k,v])=>{
@@ -172,7 +195,7 @@ function renderHist(rows){
   document.getElementById("hist").innerHTML = rows.slice().reverse().slice(0,25).map(r=>`
     <tr><td class="muted">${esc(r.throw_no)}</td><td class="muted">${esc((r.timestamp||"").slice(11,16))}</td>
       <td><img src="/img/${encodeURIComponent(r.image)}" loading="lazy" alt=""></td>
-      <td class="f">${emoji(r.food,r.item)} ${esc(r.food||r.item)}</td>
+      <td class="f">${r.food==="offline test" ? "✅ <span style='text-transform:none'>detected (AI off)</span>" : emoji(r.food,r.item)+" "+esc(r.food||r.item)}</td>
       <td style="color:${confColor(+r.confidence)}">${pct(r.confidence)}%</td>
       <td class="muted">${r.weight_g ? esc(r.weight_g)+" g" : "–"}</td></tr>`).join("");
 }
