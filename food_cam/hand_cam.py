@@ -58,6 +58,29 @@ LOG_COLS = ["throw_no", "timestamp", "food", "item", "confidence", "description"
             "seen_in_hand", "weight_g", "throw_s", "latency_s", "trigger", "image"]
 HERE = Path(__file__).resolve().parent
 
+# --- API settings: read food_cam/.env (never committed) then environment variables ---
+def _load_env(path):
+    if path.exists():
+        for line in path.read_text(encoding="utf-8-sig").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+_load_env(HERE / ".env")
+API_BASE = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
+if API_BASE.endswith("/v1"):
+    API_BASE = API_BASE[:-3]
+MODEL = os.environ.get("FOOD_CAM_MODEL", MODEL)
+
+
+def _auth_headers():
+    """ANTHROPIC_AUTH_TOKEN -> 'Authorization: Bearer' (custom endpoints); else ANTHROPIC_API_KEY -> x-api-key."""
+    tok = os.environ.get("ANTHROPIC_AUTH_TOKEN")
+    if tok:
+        return {"Authorization": f"Bearer {tok}"}
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    return {"x-api-key": key} if key else None
+
 PROMPT = f"""You are the vision sensor of a restaurant food-waste tracker.
 The camera looks at the opening of a waste bin.
 
@@ -127,9 +150,9 @@ def pick_hand_frames(frames, n=N_HAND_FRAMES):
 def classify(before, hand_frames, after_crop, offline=False):
     if offline:
         return {"item": "other", "confidence": 0.0, "description": "offline mode", "seen_in_hand": False}
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if not key:
-        return {"item": "other", "confidence": 0.0, "description": "no ANTHROPIC_API_KEY set", "seen_in_hand": False}
+    auth = _auth_headers()
+    if not auth:
+        return {"item": "other", "confidence": 0.0, "description": "no API key: create food_cam/.env (see README)", "seen_in_hand": False}
     imgs = [before] + hand_frames + [after_crop]
     content = [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
                                             "data": jpg_b64(im, 512 if i == 0 else 768)}}
@@ -137,8 +160,8 @@ def classify(before, hand_frames, after_crop, offline=False):
     content.append({"type": "text", "text": PROMPT})
     body = {"model": MODEL, "max_tokens": 200, "messages": [{"role": "user", "content": content}]}
     req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages", data=json.dumps(body).encode(),
-        headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"})
+        f"{API_BASE}/v1/messages", data=json.dumps(body).encode(),
+        headers={**auth, "anthropic-version": "2023-06-01", "content-type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=40) as r:
             text = json.loads(r.read())["content"][0]["text"]
@@ -368,6 +391,7 @@ def main():
     MOTION_START = a.start if a.start is not None else MOTION_START
     MOTION_STOP = a.stop if a.stop is not None else MOTION_STOP
     MOTION_PIX = a.pix if a.pix is not None else MOTION_PIX
+    print(f"AI: {'OFF (--offline)' if a.offline else API_BASE + '  model ' + MODEL + ('  key OK' if _auth_headers() else '  NO KEY FOUND (food_cam/.env)')}")
     print(f"motion: start>{MOTION_START*100:.2f}%  stop<{MOTION_STOP*100:.2f}%  pixel>{MOTION_PIX}")
 
     roi = tuple(int(v) for v in a.roi.split(",")) if a.roi else None
