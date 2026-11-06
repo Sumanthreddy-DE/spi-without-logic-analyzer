@@ -14,9 +14,11 @@ python3 hand_cam.py --camera 0 --offline       # test motion/frames without API
 
 Keys: `r` draw bin-opening region (do first) · `SPACE` force snap · `b` new before-frame · `d` motion debug · `q` quit
 
-HTTP: `:8001/last` (latest JSON) · `:8001/status` · `:8001/img/<file>` · `:8001/snap?weight_g=123`
+**Dashboard: http://localhost:8001/** (live camera, last throw with food name + photos, totals, history)
 
-Output: `captures/hand_log.csv` + `captures/throw_XXX_{hand1..3,after,collage}.jpg`
+HTTP: `:8001/history` · `:8001/last` (latest JSON) · `:8001/status` · `:8001/img/<file>` · `:8001/snap?weight_g=123`
+
+Output: `captures/throws.csv` (with `food` = specific name like apple/banana, `item` = category) + `captures/throw_XXX_{hand1..3,after,collage}.jpg`
 
 Tuning (top of `hand_cam.py`): `MOTION_START`, `MOTION_STOP`, `QUIET_S`, `MODEL`
 (`claude-sonnet-5-5` default, `claude-haiku-5-5` faster/cheaper).

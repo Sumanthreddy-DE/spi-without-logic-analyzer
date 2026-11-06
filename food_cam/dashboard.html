@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bio Waste Tracker – live</title>
+<style>
+  :root{
+    --bg:#0f1412; --panel:#18201c; --line:#26312b; --text:#eef3ef; --muted:#8fa197;
+    --green:#3ecf7a; --red:#ff5a4f; --amber:#ffb23e; --accent:#3ecf7a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  header{display:flex;align-items:center;gap:16px;padding:14px 24px;border-bottom:1px solid var(--line)}
+  header h1{font-size:20px;margin:0;font-weight:650;letter-spacing:.2px}
+  header h1 span{color:var(--accent)}
+  .pill{margin-left:auto;padding:6px 14px;border-radius:999px;font-weight:700;font-size:14px;letter-spacing:.5px;
+        background:#1f2a24;color:var(--green);border:1px solid currentColor;transition:all .2s}
+  .pill.THROW{color:var(--red)} .pill.BUSY{color:var(--amber)} .pill.OFF{color:var(--muted)}
+  .count{color:var(--muted);font-size:14px}
+  main{display:grid;grid-template-columns:1.15fr 1fr;gap:20px;padding:20px 24px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;min-width:0}
+  .card h2{margin:0 0 12px;font-size:13px;text-transform:uppercase;letter-spacing:1.2px;color:var(--muted);font-weight:600}
+  #live{width:100%;border-radius:10px;display:block;background:#000;aspect-ratio:16/9;object-fit:contain}
+  #last{display:flex;flex-direction:column;gap:12px}
+  .hero{display:flex;align-items:center;gap:18px}
+  .emoji{font-size:84px;line-height:1;width:96px;text-align:center}
+  .food{font-size:46px;font-weight:750;line-height:1.05;text-transform:capitalize;word-break:break-word}
+  .desc{color:var(--muted);font-size:17px;margin-top:4px}
+  .chips{display:flex;gap:8px;flex-wrap:wrap}
+  .chip{padding:4px 10px;border-radius:8px;background:#222d27;color:var(--muted);font-size:13px}
+  .conf{height:10px;border-radius:6px;background:#222d27;overflow:hidden}
+  .conf>div{height:100%;background:var(--green);width:0;transition:width .5s}
+  #collage{width:100%;border-radius:10px;background:#000;display:none}
+  .flash{animation:flash 1.2s ease-out}
+  @keyframes flash{0%{box-shadow:0 0 0 0 rgba(62,207,122,.7)}100%{box-shadow:0 0 0 22px rgba(62,207,122,0)}}
+  .wide{grid-column:1 / -1;display:grid;grid-template-columns:1fr 1.4fr;gap:20px}
+  .bars .row{display:grid;grid-template-columns:34px 1fr 1fr 56px;align-items:center;gap:10px;margin:7px 0}
+  .bars .e{font-size:24px;text-align:center}
+  .bars .n{text-transform:capitalize}
+  .bars .b{height:14px;border-radius:7px;background:#222d27;overflow:hidden}
+  .bars .b>div{height:100%;background:var(--accent)}
+  .bars .v{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+  table{width:100%;border-collapse:collapse;font-size:15px}
+  td,th{padding:7px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:1px}
+  td img{height:44px;border-radius:6px;display:block}
+  td.f{text-transform:capitalize;font-weight:600}
+  .muted{color:var(--muted)}
+  .empty{color:var(--muted);padding:30px 0;text-align:center}
+  @media (max-width:900px){main,.wide{grid-template-columns:1fr}.food{font-size:36px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Bio Waste Tracker <span>· live</span></h1>
+  <span class="count" id="count"></span>
+  <span class="pill OFF" id="pill">CONNECTING…</span>
+</header>
+
+<main>
+  <section class="card">
+    <h2>Camera · bin opening</h2>
+    <img id="live" alt="live camera">
+  </section>
+
+  <section class="card" id="lastcard">
+    <h2>Last throw</h2>
+    <div id="last"><div class="empty">Waiting for the first throw…</div></div>
+  </section>
+
+  <div class="wide">
+    <section class="card">
+      <h2>Thrown away today</h2>
+      <div class="bars" id="bars"><div class="empty">No data yet</div></div>
+    </section>
+    <section class="card">
+      <h2>History</h2>
+      <table><thead><tr><th>#</th><th>Time</th><th></th><th>Food</th><th>Conf.</th><th>Weight</th></tr></thead>
+        <tbody id="hist"></tbody></table>
+    </section>
+  </div>
+</main>
+
+<script>
+const EMOJI = {
+  apple:"🍎","green apple":"🍏",banana:"🍌","banana peel":"🍌",orange:"🍊",lemon:"🍋",pear:"🍐",grape:"🍇",grapes:"🍇",
+  strawberry:"🍓",watermelon:"🍉",pineapple:"🍍",mango:"🥭",peach:"🍑",cherry:"🍒",kiwi:"🥝",coconut:"🥥",avocado:"🥑",
+  tomato:"🍅",cucumber:"🥒",carrot:"🥕",potato:"🥔",onion:"🧅",garlic:"🧄",broccoli:"🥦",lettuce:"🥬",salad:"🥗",
+  pepper:"🫑","bell pepper":"🫑",corn:"🌽",mushroom:"🍄",eggplant:"🍆",
+  bread:"🍞","bread roll":"🥖",baguette:"🥖",croissant:"🥐",pretzel:"🥨",toast:"🍞",
+  rice:"🍚",pasta:"🍝",spaghetti:"🍝",noodles:"🍜","french fries":"🍟",fries:"🍟",pizza:"🍕",burger:"🍔",sandwich:"🥪",
+  egg:"🥚",cheese:"🧀",meat:"🥩",steak:"🥩",chicken:"🍗",bacon:"🥓",sausage:"🌭",fish:"🐟",shrimp:"🍤",
+  cake:"🍰",cookie:"🍪",donut:"🍩",chocolate:"🍫",soup:"🍲",sauce:"🥫",milk:"🥛",yogurt:"🥛",nothing:"✋"
+};
+const CAT_EMOJI = {bread:"🍞",fries_potatoes:"🍟",rice_pasta:"🍝",salad_vegetables:"🥬",meat_fish:"🍗",
+  fruit_peels:"🍌",sauce_liquid:"🥫",dairy_cheese:"🧀",other:"🗑️"};
+function emoji(food, cat){
+  food=(food||"").toLowerCase().trim();
+  if(EMOJI[food]) return EMOJI[food];
+  for(const k of Object.keys(EMOJI)) if(food.includes(k)) return EMOJI[k];
+  return CAT_EMOJI[cat] || "🗑️";
+}
+const esc = s => String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const pct = c => Math.round((+c||0)*100);
+const confColor = c => c>=.75?"var(--green)":c>=.45?"var(--amber)":"var(--red)";
+
+let lastN = -1;
+
+// live camera: reload next frame when the previous one arrived
+const live = document.getElementById("live");
+function nextFrame(){ live.src = "/live.jpg?t=" + Date.now(); }
+live.onload = () => setTimeout(nextFrame, 120);
+live.onerror = () => setTimeout(nextFrame, 1000);
+nextFrame();
+
+async function status(){
+  try{
+    const s = await (await fetch("/status")).json();
+    const pill = document.getElementById("pill");
+    const st = s.busy ? "BUSY" : s.state;
+    pill.className = "pill " + st;
+    pill.textContent = s.busy ? "ANALYSING…" : (s.state==="THROW" ? "● THROW DETECTED" : "READY");
+    document.getElementById("count").textContent = s.n + " throws" + (s.offline ? " · offline mode" : "");
+    if(s.n !== lastN){ lastN = s.n; await history(); }
+  }catch(e){
+    const pill = document.getElementById("pill"); pill.className="pill OFF"; pill.textContent="NO CONNECTION";
+  }
+}
+
+function renderLast(r){
+  const c = +r.confidence || 0;
+  document.getElementById("last").innerHTML = `
+    <div class="hero">
+      <div class="emoji">${emoji(r.food, r.item)}</div>
+      <div><div class="food">${esc(r.food || r.item)}</div><div class="desc">${esc(r.description)}</div></div>
+    </div>
+    <div class="conf"><div style="width:${pct(c)}%;background:${confColor(c)}"></div></div>
+    <div class="chips">
+      <span class="chip">${pct(c)}% sure</span>
+      <span class="chip">${esc((r.item||"").replace("_"," / "))}</span>
+      ${r.weight_g ? `<span class="chip">${esc(r.weight_g)} g</span>` : ""}
+      <span class="chip">${r.seen_in_hand==="True"||r.seen_in_hand===true ? "seen in hand ✓" : "seen in bin"}</span>
+      <span class="chip">#${esc(r.throw_no)} · ${esc((r.timestamp||"").slice(11,19))}</span>
+    </div>
+    <img id="collage" src="/img/${encodeURIComponent(r.image)}" style="display:block" alt="frames">`;
+  const card = document.getElementById("lastcard");
+  card.classList.remove("flash"); void card.offsetWidth; card.classList.add("flash");
+}
+
+function renderBars(rows){
+  const tot = {};
+  for(const r of rows){
+    const k = (r.food||r.item||"?").toLowerCase();
+    if(k==="nothing"||k==="offline test") continue;
+    tot[k] = tot[k] || {n:0, g:0, item:r.item};
+    tot[k].n++; tot[k].g += parseFloat(r.weight_g)||0;
+  }
+  const list = Object.entries(tot).sort((a,b)=> (b[1].g-a[1].g) || (b[1].n-a[1].n)).slice(0,10);
+  if(!list.length){ document.getElementById("bars").innerHTML='<div class="empty">No data yet</div>'; return; }
+  const useG = list.some(([,v])=>v.g>0);
+  const max = Math.max(...list.map(([,v])=> useG? v.g : v.n));
+  document.getElementById("bars").innerHTML = list.map(([k,v])=>{
+    const val = useG ? v.g : v.n;
+    return `<div class="row"><div class="e">${emoji(k,v.item)}</div><div class="n">${esc(k)}</div>
+      <div class="b"><div style="width:${100*val/max}%"></div></div>
+      <div class="v">${v.g>0 ? Math.round(v.g)+" g" : v.n+"×"}</div></div>`;
+  }).join("");
+}
+
+function renderHist(rows){
+  document.getElementById("hist").innerHTML = rows.slice().reverse().slice(0,25).map(r=>`
+    <tr><td class="muted">${esc(r.throw_no)}</td><td class="muted">${esc((r.timestamp||"").slice(11,16))}</td>
+      <td><img src="/img/${encodeURIComponent(r.image)}" loading="lazy" alt=""></td>
+      <td class="f">${emoji(r.food,r.item)} ${esc(r.food||r.item)}</td>
+      <td style="color:${confColor(+r.confidence)}">${pct(r.confidence)}%</td>
+      <td class="muted">${r.weight_g ? esc(r.weight_g)+" g" : "–"}</td></tr>`).join("");
+}
+
+async function history(){
+  const rows = await (await fetch("/history")).json();
+  if(rows.length) renderLast(rows[rows.length-1]);
+  renderBars(rows); renderHist(rows);
+}
+
+status(); setInterval(status, 300);
+</script>
+</body>
+</html>

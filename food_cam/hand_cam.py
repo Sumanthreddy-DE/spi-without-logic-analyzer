@@ -25,7 +25,8 @@ HTTP (for dashboard / server.py):
   GET :8001/img/<file>       saved images
   GET :8001/snap?weight_g=   force a snap (e.g. from the scale)
 
-Output: captures/hand_log.csv + captures/throw_XXX_*.jpg
+Dashboard: http://localhost:8001/
+Output: captures/throws.csv + captures/throw_XXX_*.jpg
 """
 import argparse, base64, csv, json, os, sys, threading, time, collections
 import urllib.request, urllib.error
@@ -53,6 +54,9 @@ BUFFER_S = 4.0           # rolling frame buffer
 N_HAND_FRAMES = 3        # in-hand frames sent to Claude
 COOLDOWN_S = 1.0         # ignore motion right after a throw
 OUT = Path("captures")
+LOG_COLS = ["throw_no", "timestamp", "food", "item", "confidence", "description",
+            "seen_in_hand", "weight_g", "throw_s", "latency_s", "trigger", "image"]
+HERE = Path(__file__).resolve().parent
 
 PROMPT = f"""You are the vision sensor of a restaurant food-waste tracker.
 The camera looks at the opening of a waste bin.
@@ -66,11 +70,12 @@ Identify the food that was thrown away. Ignore hands, gloves, packaging, the bin
 itself and food already in the bin before.
 
 Answer ONLY with JSON, no other text:
-{{"item": one of {FOOD_CLASSES},
-  "confidence": number 0..1,
-  "description": "max 8 words, e.g. 'half a baguette'",
+{{"food": "the specific food, English, lowercase, singular, 1-3 words, e.g. 'apple', 'banana peel', 'bread roll', 'french fries'",
+  "item": category, one of {FOOD_CLASSES},
+  "confidence": number 0..1 (how sure you are about "food"),
+  "description": "max 8 words, e.g. 'half-eaten red apple'",
   "seen_in_hand": true/false}}
-If no food is visible (e.g. only a hand, or packaging), use "other" with confidence < 0.3."""
+If no food is visible (e.g. only a hand, or packaging), use food "nothing", item "other", confidence < 0.3."""
 
 # ----------------------------------------------------------------- helpers ---
 def jpg_b64(img, max_side=768):
@@ -141,6 +146,7 @@ def classify(before, hand_frames, after_crop, offline=False):
         if res.get("item") not in FOOD_CLASSES:
             res["item"] = "other"
         res["confidence"] = float(res.get("confidence", 0))
+        res["food"] = str(res.get("food") or res["item"]).strip().lower()[:40]
         return res
     except urllib.error.HTTPError as e:
         return {"item": "other", "confidence": 0.0, "description": f"API {e.code}: {e.read()[:100]!r}", "seen_in_hand": False}
@@ -193,13 +199,14 @@ class HandCam:
         self.busy, self.last = False, None
         self.mask_dbg = None
         OUT.mkdir(exist_ok=True)
-        self.log = OUT / "hand_log.csv"
+        self.view_jpg = None      # latest annotated frame for the dashboard
+        self.log = OUT / "throws.csv"
         if not self.log.exists():
             with open(self.log, "w", newline="") as fh:
-                csv.writer(fh).writerow(["throw_no", "timestamp", "item", "confidence", "description",
-                                         "seen_in_hand", "weight_g", "throw_s", "latency_s", "trigger", "image"])
-        with open(self.log) as fh:
-            self.n = sum(1 for _ in fh) - 1
+                csv.writer(fh).writerow(LOG_COLS)
+        with open(self.log, newline="") as fh:
+            self.history = list(csv.DictReader(fh))
+        self.n = len(self.history)
 
     def crop(self, f):
         x, y, w, h = self.roi
@@ -266,6 +273,7 @@ class HandCam:
             box = changed_region(b, a)
             a_crop = a if box is None else a[box[1]:box[1] + box[3], box[0]:box[0] + box[2]]
             res = classify(b, hand, a_crop, self.offline)
+            res.setdefault("food", res["item"] if not self.offline else "offline test")
             lat = time.time() - t0
             self.n += 1
             name = f"throw_{self.n:03d}"
@@ -279,11 +287,12 @@ class HandCam:
             res.update(throw_no=self.n, timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
                        weight_g=weight_g, throw_s=round(dur, 2), latency_s=round(lat, 2),
                        trigger=trigger, image=f"{name}_collage.jpg")
+            row = {c: res.get(c, "") for c in LOG_COLS}
+            row["confidence"] = f'{res["confidence"]:.2f}'
             with open(self.log, "a", newline="") as fh:
-                csv.writer(fh).writerow([self.n, res["timestamp"], res["item"], f'{res["confidence"]:.2f}',
-                                         res.get("description", ""), res.get("seen_in_hand", ""), weight_g,
-                                         res["throw_s"], res["latency_s"], trigger, res["image"]])
-            print(f"#{self.n} {res['item']:<18} {res['confidence']:.2f} hand={res.get('seen_in_hand')}  "
+                csv.DictWriter(fh, LOG_COLS).writerow(row)
+            self.history.append(row)
+            print(f"#{self.n} {res['food']:<16} [{res['item']}] {res['confidence']:.2f} hand={res.get('seen_in_hand')}  "
                   f"{res.get('description','')}  (throw {dur:.1f}s, {len(hand)} frames, {lat:.1f}s)")
             self.last = (res, collage)
             self.before = after
@@ -308,7 +317,20 @@ def start_http(hc, port):
             if u.path == "/last":
                 return self._json(hc.last[0] if hc.last else {})
             if u.path == "/status":
-                return self._json({"state": hc.state, "motion": round(hc.motion, 4), "busy": hc.busy})
+                return self._json({"state": hc.state, "motion": round(hc.motion, 4), "busy": hc.busy,
+                                   "n": hc.n, "offline": hc.offline})
+            if u.path == "/history":
+                return self._json(hc.history[-200:])
+            if u.path in ("/", "/dashboard"):
+                b = (HERE / "dashboard.html").read_bytes()
+                self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers(); self.wfile.write(b); return
+            if u.path == "/live.jpg":
+                if hc.view_jpg is None:
+                    return self.send_error(503)
+                self.send_response(200); self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Cache-Control", "no-store"); self.end_headers()
+                self.wfile.write(hc.view_jpg); return
             if u.path.startswith("/img/"):
                 p = OUT / Path(u.path).name
                 if p.exists():
@@ -320,7 +342,7 @@ def start_http(hc, port):
         def log_message(self, *a): pass
     srv = ThreadingHTTPServer(("0.0.0.0", port), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    print(f"HTTP: http://localhost:{port}/last  /status  /snap?weight_g=123")
+    print(f"DASHBOARD: http://localhost:{port}/   (from phone/other laptop: http://<this-laptop-ip>:{port}/)")
 
 
 def main():
@@ -336,7 +358,7 @@ def main():
     hc = HandCam(cam, a.offline, roi)
     start_http(hc, a.http_port)
     print("r = set bin region   SPACE = force snap   b = new before   d = debug   q = quit")
-    debug, last_seq = False, -1
+    debug, last_seq, last_jpg = False, -1, 0.0
 
     while True:
         f, seq = cam.get()
@@ -358,13 +380,19 @@ def main():
             cw = min(int(col_img.shape[1] * th / col_img.shape[0]), W - 20)
             v[10:10 + th, W - cw - 10:W - 10] = cv2.resize(col_img, (cw, th))
             cv2.rectangle(v, (0, H - 70), (W, H), (0, 0, 0), -1)
-            cv2.putText(v, f"#{res['throw_no']} {res['item']}  {res['confidence']:.0%}  {res.get('weight_g') or ''}",
+            cv2.putText(v, f"#{res['throw_no']} {res['food']}  {res['confidence']:.0%}  {res.get('weight_g') or ''}",
                         (15, H - 38), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
             cv2.putText(v, str(res.get("description", ""))[:70], (15, H - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1)
         if debug and hc.mask_dbg is not None:
             m = cv2.cvtColor(cv2.resize(hc.mask_dbg, (320, 180)), cv2.COLOR_GRAY2BGR)
             v[H - 260:H - 80, 10:330] = m
+        if time.time() - last_jpg > 0.15:      # ~7 fps for the dashboard
+            ok, jb = cv2.imencode(".jpg", cv2.resize(v, (W * 640 // max(W, 1), H * 640 // max(W, 1))),
+                                  [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if ok:
+                hc.view_jpg = jb.tobytes()
+            last_jpg = time.time()
         cv2.imshow("hand_cam", v)
         k = cv2.waitKey(15) & 0xFF
         if k == ord("q"):
