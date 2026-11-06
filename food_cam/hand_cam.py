@@ -161,7 +161,9 @@ def classify(before, hand_frames, after_crop, offline=False):
     body = {"model": MODEL, "max_tokens": 200, "messages": [{"role": "user", "content": content}]}
     req = urllib.request.Request(
         f"{API_BASE}/v1/messages", data=json.dumps(body).encode(),
-        headers={**auth, "anthropic-version": "2023-06-01", "content-type": "application/json"})
+        headers={**auth, "anthropic-version": "2023-06-01", "content-type": "application/json",
+                 "user-agent": os.environ.get("FOOD_CAM_USER_AGENT",
+                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) food-cam/1.0")})
     try:
         with urllib.request.urlopen(req, timeout=40) as r:
             text = json.loads(r.read())["content"][0]["text"]
@@ -220,6 +222,9 @@ class HandCam:
         self.state, self.t_start, self.t_quiet, self.t_cool = self.IDLE, 0, None, 0
         self.motion = 0.0
         self.ignored = 0
+        self.idle_hist = collections.deque(maxlen=150)   # ~5 s of idle motion values
+        self.noise = 0.0
+        self.th_start, self.th_stop = MOTION_START, MOTION_STOP
         self.busy, self.last = False, None
         self.mask_dbg = None
         OUT.mkdir(exist_ok=True)
@@ -258,16 +263,22 @@ class HandCam:
         if self.busy or now < self.t_cool:
             return
         if self.state == self.IDLE:
-            if self.motion > MOTION_START:
+            # learn the background flicker of this camera and stay above it
+            self.idle_hist.append(self.motion)
+            if len(self.idle_hist) >= 30:
+                self.noise = float(np.percentile(self.idle_hist, 90))
+                self.th_stop = max(MOTION_STOP, self.noise * 1.5 + 0.002)
+                self.th_start = max(MOTION_START, self.noise * 3 + 0.008, self.th_stop * 2)
+            if self.motion > self.th_start:
                 self.state, self.t_start, self.t_quiet = self.THROW, now, None
                 # before = last quiet frame in buffer
-                quiet = [b for b in self.buf if b[2] < MOTION_STOP and b[0] < now - 0.15]
+                quiet = [b for b in self.buf if b[2] < self.th_stop and b[0] < now - 0.15]
                 if quiet:
                     self.before = quiet[-1][1]
-            elif self.motion < MOTION_STOP:
+            elif self.motion < self.th_stop:
                 self.before = f   # keep baseline fresh while idle (light changes)
         else:  # THROW
-            if self.motion < MOTION_STOP:
+            if self.motion < self.th_stop:
                 self.t_quiet = self.t_quiet or now
             else:
                 self.t_quiet = None
@@ -277,6 +288,7 @@ class HandCam:
                 self.state = self.IDLE
                 self.before = f
                 self.ignored += 1
+                self.idle_hist.clear()          # re-learn noise level
                 print(f"   (ignored: motion for {dur:.0f}s without a stop - noise? raise --start/--pix or set region with r)")
                 return
             if self.t_quiet and now - self.t_quiet > QUIET_S:
@@ -413,7 +425,7 @@ def main():
         x, y, w, h = hc.roi
         col = (0, 0, 255) if hc.state == hc.THROW else (0, 255, 0)
         cv2.rectangle(v, (x, y), (x + w, y + h), col, 2)
-        cv2.putText(v, f"{hc.state}  motion {hc.motion*100:.1f}%", (x + 8, y + 30),
+        cv2.putText(v, f"{hc.state}  motion {hc.motion*100:.1f}%  (noise {hc.noise*100:.1f}%, start>{hc.th_start*100:.1f}%)", (x + 8, y + 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, col, 2)
         if hc.busy:
             cv2.putText(v, "ANALYSING...", (15, H - 90), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 200, 255), 3)
