@@ -49,7 +49,7 @@ MOTION_START = 0.01      # >1% of region moving -> throw started  (tune with d =
 MOTION_STOP = 0.003      # <0.3% moving ...
 QUIET_S = 0.8            # ... for this long -> throw finished
 MIN_THROW_S = 0.3        # shorter motion = flicker, ignored
-MAX_THROW_S = 12.0       # longer = someone standing there, force finish
+MAX_THROW_S = 8.0       # longer = someone standing there, force finish
 BUFFER_S = 4.0           # rolling frame buffer
 N_HAND_FRAMES = 3        # in-hand frames sent to Claude
 COOLDOWN_S = 1.0         # ignore motion right after a throw
@@ -196,6 +196,7 @@ class HandCam:
         self.buf = collections.deque()
         self.state, self.t_start, self.t_quiet, self.t_cool = self.IDLE, 0, None, 0
         self.motion = 0.0
+        self.ignored = 0
         self.busy, self.last = False, None
         self.mask_dbg = None
         OUT.mkdir(exist_ok=True)
@@ -248,9 +249,17 @@ class HandCam:
             else:
                 self.t_quiet = None
             dur = now - self.t_start
-            if (self.t_quiet and now - self.t_quiet > QUIET_S) or dur > MAX_THROW_S:
+            if dur > MAX_THROW_S:
+                # motion never stopped: noise, camera shake or someone standing there -> no throw
+                self.state = self.IDLE
+                self.before = f
+                self.ignored += 1
+                print(f"   (ignored: motion for {dur:.0f}s without a stop - noise? raise --start/--pix or set region with r)")
+                return
+            if self.t_quiet and now - self.t_quiet > QUIET_S:
                 self.state = self.IDLE
                 if dur - QUIET_S < MIN_THROW_S:
+                    self.ignored += 1
                     return  # flicker
                 frames = [b for b in self.buf if self.t_start - 0.2 <= b[0] <= (self.t_quiet or now)]
                 after = f
@@ -346,18 +355,28 @@ def start_http(hc, port):
 
 
 def main():
+    global MOTION_START, MOTION_STOP, MOTION_PIX
     ap = argparse.ArgumentParser()
     ap.add_argument("--camera", default="0")
     ap.add_argument("--http-port", type=int, default=8001)
     ap.add_argument("--offline", action="store_true")
     ap.add_argument("--roi", help="x,y,w,h of the bin opening (else press r)")
+    ap.add_argument("--start", type=float, help=f"motion fraction that starts a throw (default {MOTION_START})")
+    ap.add_argument("--stop", type=float, help=f"motion fraction counted as quiet (default {MOTION_STOP})")
+    ap.add_argument("--pix", type=int, help=f"per-pixel change counted as motion (default {MOTION_PIX})")
     a = ap.parse_args()
+    MOTION_START = a.start if a.start is not None else MOTION_START
+    MOTION_STOP = a.stop if a.stop is not None else MOTION_STOP
+    MOTION_PIX = a.pix if a.pix is not None else MOTION_PIX
+    print(f"motion: start>{MOTION_START*100:.2f}%  stop<{MOTION_STOP*100:.2f}%  pixel>{MOTION_PIX}")
 
     roi = tuple(int(v) for v in a.roi.split(",")) if a.roi else None
     cam = Camera(a.camera)
     hc = HandCam(cam, a.offline, roi)
     start_http(hc, a.http_port)
     print("r = set bin region   SPACE = force snap   b = new before   d = debug   q = quit")
+    if not roi:
+        print(">>> No region set: press r in the camera window and draw a box around the bin opening! <<<")
     debug, last_seq, last_jpg = False, -1, 0.0
 
     while True:
