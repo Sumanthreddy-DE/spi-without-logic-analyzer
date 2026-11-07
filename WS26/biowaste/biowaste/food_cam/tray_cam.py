@@ -121,9 +121,12 @@ def changed_region(before, after):
 def classify(before, after_crop, offline=False):
     if offline:
         return {"item": "other", "food": "", "confidence": 0.0, "description": "offline mode"}
+    # ANTHROPIC_AUTH_TOKEN -> Bearer (custom endpoint); ANTHROPIC_API_KEY -> x-api-key (api.anthropic.com)
     token = os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")
     if not token or "paste-your-key" in token:
         return {"item": "other", "food": "", "confidence": 0.0, "description": "no key in .env"}
+    auth = ({"authorization": f"Bearer {token}"} if os.environ.get("ANTHROPIC_AUTH_TOKEN")
+            else {"x-api-key": token})
     base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
     body = {
         "model": MODEL,
@@ -134,8 +137,7 @@ def classify(before, after_crop, offline=False):
             {"type": "text", "text": PROMPT},
         ]}],
     }
-    headers = {"x-api-key": token, "authorization": f"Bearer {token}",
-               "anthropic-version": "2023-06-01", "content-type": "application/json"}
+    headers = {**auth, "anthropic-version": "2023-06-01", "content-type": "application/json"}
     req = urllib.request.Request(base + "/v1/messages", data=json.dumps(body).encode(), headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
